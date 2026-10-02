@@ -15,7 +15,7 @@ import {
   type ContestSnapshot,
 } from "@/game/contest";
 import { getContestFn, submitContestScoreFn } from "@/game/contest.functions";
-import { DEFAULT_SETTINGS, loadSettings, type GameSettings, type Pace } from "@/game/storage";
+import { DEFAULT_SETTINGS, KEY_SCHEMES, loadSettings, type GameSettings, type Pace } from "@/game/storage";
 import { Check, ChevronDown, ChevronUp, Crosshair, RotateCcw, Share2 } from "lucide-react";
 
 const INITIAL_HUD: HudSnapshot = {
@@ -314,6 +314,23 @@ export function EndlessRunner() {
                           </Choice>
                         ))}
                       </SettingRow>
+                      <SettingRow label="Keys">
+                        {(
+                          [
+                            ["arrows", "Arrows"],
+                            ["wasd", "WASD"],
+                            ["all", "All"],
+                          ] as const
+                        ).map(([id, label]) => (
+                          <Choice
+                            key={id}
+                            on={settings.keys === id}
+                            onClick={() => onChangeSettings({ ...settings, keys: id })}
+                          >
+                            {label}
+                          </Choice>
+                        ))}
+                      </SettingRow>
                       <SettingRow label="Shake">
                         <Choice on={settings.shake} onClick={() => onChangeSettings({ ...settings, shake: true })}>
                           On
@@ -323,7 +340,7 @@ export function EndlessRunner() {
                         </Choice>
                       </SettingRow>
                       <p className="text-xs leading-relaxed text-fg-muted">
-                        Lives and pace apply to Free run and Practice. Today's course stays at 3 lives and normal pace so scores match.
+                        Lives and pace apply to Free run and Practice. Today's course stays at 3 lives and normal pace so scores match. Keys work in every mode.
                       </p>
                       <button
                         type="button"
@@ -536,38 +553,51 @@ export function EndlessRunner() {
           </div>
         </div>
 
-        <div className="mt-3 grid shrink-0 grid-cols-[1fr_1.2fr] gap-2 md:hidden">
+        <div className="mt-3 grid shrink-0 grid-cols-[1fr_1.2fr] gap-2">
           <div className="grid grid-rows-2 gap-2">
             <button
               type="button"
               {...holdButton(onBoostDown, onBoostUp)}
-              className={`min-h-16 rounded-2xl border text-sm font-semibold ${
+              className={`flex min-h-16 flex-col items-center justify-center rounded-2xl border text-sm font-semibold ${
                 hud.boosting ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg-elevated text-fg"
               }`}
             >
               Run
+              <span className={`mt-0.5 block font-mono text-[0.65rem] font-medium ${hud.boosting ? "text-accent-fg/80" : "text-fg-muted"}`}>
+                {KEY_SCHEMES[settings.keys].runLabel}
+              </span>
             </button>
             <button
               type="button"
               {...holdButton(onSlideDown, onSlideUp)}
-              className={`flex min-h-16 items-center justify-center gap-1 rounded-2xl border text-sm font-semibold ${
+              className={`flex min-h-16 flex-col items-center justify-center rounded-2xl border text-sm font-semibold ${
                 hud.sliding ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg-elevated text-fg"
               }`}
             >
-              <ChevronDown className="size-4" aria-hidden />
-              Slide
+              <span className="flex items-center gap-1">
+                <ChevronDown className="size-4" aria-hidden />
+                Slide
+              </span>
+              <span className={`font-mono text-[0.65rem] font-medium ${hud.sliding ? "text-accent-fg/80" : "text-fg-muted"}`}>
+                {KEY_SCHEMES[settings.keys].slideLabel}
+              </span>
             </button>
           </div>
           <div className="grid grid-rows-[1.4fr_0.8fr] gap-2">
             <button
               type="button"
               {...holdButton(onJump, onJumpUp)}
-              className={`flex min-h-20 items-center justify-center gap-2 rounded-2xl border text-base font-semibold ${
+              className={`flex min-h-20 flex-col items-center justify-center rounded-2xl border text-base font-semibold ${
                 hud.jumpHeld ? "border-accent bg-accent text-accent-fg" : "border-border bg-bg-elevated text-fg"
               }`}
             >
-              <ChevronUp className="size-5" aria-hidden />
-              Jump
+              <span className="flex items-center gap-2">
+                <ChevronUp className="size-5" aria-hidden />
+                Jump
+              </span>
+              <span className={`font-mono text-[0.65rem] font-medium ${hud.jumpHeld ? "text-accent-fg/80" : "text-fg-muted"}`}>
+                {KEY_SCHEMES[settings.keys].jumpLabel}
+              </span>
             </button>
             <button
               type="button"
@@ -575,21 +605,17 @@ export function EndlessRunner() {
                 e.preventDefault();
                 onFire();
               }}
-              className={`flex min-h-12 items-center justify-center gap-2 rounded-2xl border text-sm font-semibold ${
+              className={`flex min-h-12 flex-col items-center justify-center rounded-2xl border text-sm font-semibold ${
                 hud.fireReady ? "border-border bg-bg-elevated text-fg" : "border-border bg-bg-subtle text-fg-muted"
               }`}
             >
-              <Crosshair className="size-4" aria-hidden />
-              Fire
+              <span className="flex items-center gap-2">
+                <Crosshair className="size-4" aria-hidden />
+                Fire
+              </span>
+              <span className="font-mono text-[0.65rem] font-medium text-fg-muted">{KEY_SCHEMES[settings.keys].fireLabel}</span>
             </button>
           </div>
-        </div>
-
-        <div className="mt-3 hidden shrink-0 items-center justify-center gap-2 md:flex">
-          <KeyHint label="Space" note="hold jump" />
-          <KeyHint label="Shift" note="hold run" />
-          <KeyHint label="Down" note="slide" />
-          <KeyHint label="F" note="fire" />
         </div>
       </div>
     </div>
@@ -644,15 +670,6 @@ function holdButton(down: () => void, up: () => void) {
     },
     onPointerCancel: () => up(),
   };
-}
-
-function KeyHint({ label, note }: { label: string; note: string }) {
-  return (
-    <div className="flex items-center gap-2 rounded-full border border-border bg-bg-elevated px-3 py-1.5">
-      <span className="font-mono text-xs font-semibold text-fg">{label}</span>
-      <span className="text-xs text-fg-muted">{note}</span>
-    </div>
-  );
 }
 
 function useMidtermClock(): MidtermRemaining | null {

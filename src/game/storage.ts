@@ -3,17 +3,65 @@ const SAVE_VERSION = 1;
 const SETTINGS_KEY = "red-tie-settings-v1";
 
 export type Pace = "slow" | "normal" | "fast";
+export type KeyScheme = "arrows" | "wasd" | "all";
 
 export type GameSettings = {
   lives: 1 | 3 | 5;
   pace: Pace;
   shake: boolean;
+  keys: KeyScheme;
 };
 
 export const DEFAULT_SETTINGS: GameSettings = {
   lives: 3,
   pace: "normal",
   shake: true,
+  keys: "all",
+};
+
+export const KEY_SCHEMES: Record<
+  KeyScheme,
+  {
+    jump: string[];
+    slide: string[];
+    run: string[];
+    fire: string[];
+    jumpLabel: string;
+    slideLabel: string;
+    runLabel: string;
+    fireLabel: string;
+  }
+> = {
+  arrows: {
+    jump: ["Space", "ArrowUp"],
+    slide: ["ArrowDown"],
+    run: ["ShiftLeft", "ShiftRight", "ArrowRight"],
+    fire: ["KeyZ", "ControlLeft", "ControlRight"],
+    jumpLabel: "↑ Space",
+    slideLabel: "↓",
+    runLabel: "→ Shift",
+    fireLabel: "Z Ctrl",
+  },
+  wasd: {
+    jump: ["KeyW", "Space"],
+    slide: ["KeyS"],
+    run: ["ShiftLeft", "ShiftRight", "KeyD"],
+    fire: ["KeyF", "KeyJ"],
+    jumpLabel: "W Space",
+    slideLabel: "S",
+    runLabel: "D Shift",
+    fireLabel: "F",
+  },
+  all: {
+    jump: ["Space", "ArrowUp", "KeyW", "KeyK"],
+    slide: ["ArrowDown", "KeyS", "KeyL"],
+    run: ["ShiftLeft", "ShiftRight", "ArrowRight", "KeyD", "KeyX"],
+    fire: ["KeyF", "KeyJ", "KeyZ"],
+    jumpLabel: "↑ W Space",
+    slideLabel: "↓ S",
+    runLabel: "→ D Shift",
+    fireLabel: "F Z",
+  },
 };
 
 export function loadSettings(): GameSettings {
@@ -26,7 +74,8 @@ export function loadSettings(): GameSettings {
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
     const lives = parsed.lives === 1 || parsed.lives === 5 ? parsed.lives : 3;
     const pace = parsed.pace === "slow" || parsed.pace === "fast" ? parsed.pace : "normal";
-    return { lives, pace, shake: parsed.shake !== false };
+    const keys = parsed.keys === "arrows" || parsed.keys === "wasd" ? parsed.keys : "all";
+    return { lives, pace, shake: parsed.shake !== false, keys };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
