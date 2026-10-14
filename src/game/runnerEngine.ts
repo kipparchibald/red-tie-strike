@@ -1,4 +1,4 @@
-import { loadHighScore, loadSettings, saveHighScore, saveSettings, type GameSettings } from "./storage";
+import { KEY_SCHEMES, loadHighScore, loadSettings, saveHighScore, saveSettings, type GameSettings } from "./storage";
 import { formatMidtermTicker, getMidtermRemaining, pad2 } from "./midtermClock";
 import { courseDayNow, getContestWeek, listWeekCourses } from "./contest";
 
@@ -545,6 +545,20 @@ export class RunnerEngine {
     return 1;
   }
 
+  private lessonLine(step: number) {
+    if (!this.tutorial || step < 0 || step > 5) return "";
+    const scheme = KEY_SCHEMES[this.settings.keys] ?? KEY_SCHEMES.all;
+    const lines = [
+      `Hold ${scheme.jumpLabel}`,
+      `Hold ${scheme.slideLabel}`,
+      `Hold ${scheme.runLabel}`,
+      `Hold ${scheme.runLabel} and jump`,
+      `Tap ${scheme.fireLabel}`,
+      "Jump up into the crate",
+    ];
+    return lines[step] ?? "";
+  }
+
   private seedCourse() {
     if (this.mode === "free") {
       this.rng = Math.random;
@@ -635,18 +649,19 @@ export class RunnerEngine {
   }
 
   private handleKey(e: KeyboardEvent, down: boolean) {
-    const jump = e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW";
-    const slide = e.code === "ArrowDown" || e.code === "KeyS";
-    const fire = e.code === "KeyF" || e.code === "KeyJ";
-    const boost = e.code === "ShiftLeft" || e.code === "ShiftRight" || e.code === "KeyX" || e.code === "KeyB";
+    const scheme = KEY_SCHEMES[this.settings.keys] ?? KEY_SCHEMES.all;
+    const jump = scheme.jump.includes(e.code);
+    const slide = scheme.slide.includes(e.code);
+    const fire = scheme.fire.includes(e.code);
+    const boost = scheme.run.includes(e.code);
     const start = e.code === "Enter";
-    if (jump || slide || fire || start || e.code === "KeyX" || e.code === "KeyB") e.preventDefault();
+    if (jump || slide || fire || boost || start || e.code.startsWith("Arrow")) e.preventDefault();
     if (down) this.keys.add(e.code);
     else this.keys.delete(e.code);
     if (!down) {
-      if (slide) this.pressSlide(false);
-      if (jump) this.releaseJump();
-      if (boost) this.pressBoost(false);
+      if (slide && !this.held(scheme.slide)) this.pressSlide(false);
+      if (jump && !this.held(scheme.jump)) this.releaseJump();
+      if (boost && !this.held(scheme.run)) this.pressBoost(false);
       return;
     }
     if (jump) this.pressJump();
@@ -657,6 +672,10 @@ export class RunnerEngine {
       if (this.phase === "dead") this.restart();
       else if (this.phase === "ready") this.beginRun();
     }
+  }
+
+  private held(codes: string[]) {
+    return codes.some((code) => this.keys.has(code));
   }
 
   private handlePointer(e: PointerEvent, down: boolean) {
@@ -706,22 +725,18 @@ export class RunnerEngine {
   }
 
   private isBoosting() {
-    return (
-      this.boosting ||
-      this.keys.has("ShiftLeft") ||
-      this.keys.has("ShiftRight") ||
-      this.keys.has("KeyX") ||
-      this.keys.has("KeyB")
-    );
+    const scheme = KEY_SCHEMES[this.settings.keys] ?? KEY_SCHEMES.all;
+    return this.boosting || this.held(scheme.run);
   }
 
   private jumpDown() {
-    return (
-      this.jumpHeld ||
-      this.keys.has("Space") ||
-      this.keys.has("ArrowUp") ||
-      this.keys.has("KeyW")
-    );
+    const scheme = KEY_SCHEMES[this.settings.keys] ?? KEY_SCHEMES.all;
+    return this.jumpHeld || this.held(scheme.jump);
+  }
+
+  private slideHeld() {
+    const scheme = KEY_SCHEMES[this.settings.keys] ?? KEY_SCHEMES.all;
+    return this.wantSlide || this.held(scheme.slide);
   }
 
   private hopPlan() {
@@ -1039,9 +1054,9 @@ export class RunnerEngine {
       if (this.slideTimer <= 0) {
         this.sliding = false;
         if (this.onGround) this.playerY = this.currentSupportY() - PLAYER_H_STAND;
-        if (this.wantSlide || this.keys.has("ArrowDown") || this.keys.has("KeyS")) this.trySlide();
+        if (this.slideHeld()) this.trySlide();
       }
-    } else if (this.wantSlide || this.keys.has("ArrowDown") || this.keys.has("KeyS")) {
+    } else if (this.slideHeld()) {
       this.trySlide();
     }
 
@@ -1560,7 +1575,7 @@ export class RunnerEngine {
       jumpHeld: this.jumpDown(),
       tutorialStep: this.tutorial ? this.tutorialStep : -1,
       tutorialTitle: this.tutorial && this.tutorialStep >= 0 && this.tutorialStep < 6 ? LESSONS[this.tutorialStep].title : "",
-      tutorialKey: this.tutorial && this.tutorialStep >= 0 && this.tutorialStep < 6 ? LESSONS[this.tutorialStep].key : "",
+      tutorialKey: this.lessonLine(this.tutorialStep),
       tutorialTouch: this.tutorial && this.tutorialStep >= 0 && this.tutorialStep < 6 ? LESSONS[this.tutorialStep].touch : "",
       mode: this.mode,
       beatTarget: this.beatTarget,
