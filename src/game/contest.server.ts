@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db";
-import { getContestWeek, type ContestSnapshot } from "./contest";
+import { getContestWeek, type ContestSnapshot, type LeaderboardEntry } from "./contest";
+import { sanitizeNickname } from "./profanity";
 
 function asInt(v: unknown): number {
   if (typeof v === "number" && Number.isFinite(v)) return Math.floor(v);
@@ -29,6 +30,21 @@ export async function readContest(playerId: string): Promise<ContestSnapshot> {
     where week_id = ${week.weekId} and player_id = ${playerId}
   `;
 
+  const topRows = await sql<{ nickname: string; score: number }>`
+    select coalesce(p.nickname, 'Rider') as nickname, max(s.score)::int as score
+    from contest_scores s
+    join contest_players p on p.id = s.player_id
+    where s.week_id = ${week.weekId}
+    group by p.id, p.nickname
+    order by score desc
+    limit 5
+  `;
+
+  const top: LeaderboardEntry[] = topRows.map((row) => ({
+    nickname: sanitizeNickname(row.nickname ?? "Rider"),
+    score: asInt(row.score),
+  }));
+
   const uniqueThisWeek = asInt(weekCount?.n);
   const lifetimePlayers = asInt(lifeCount?.n);
   const leaderScore = asInt(lead?.score);
@@ -38,23 +54,24 @@ export async function readContest(playerId: string): Promise<ContestSnapshot> {
     weekId: week.weekId,
     endsAt: week.endsAt,
     startsAt: week.startsAt,
-    potDollars: 0,
     uniqueThisWeek,
     lifetimePlayers,
     leaderScore,
     yourScore,
     youLead: yourScore > 0 && yourScore >= leaderScore,
+    top,
   };
 }
 
-export async function joinAndRead(playerId: string): Promise<ContestSnapshot> {
+export async function joinAndRead(playerId: string, nickname?: string): Promise<ContestSnapshot> {
   const sql = await getSql();
   const week = getContestWeek();
   const id = playerId.slice(0, 80);
+  const nick = sanitizeNickname(nickname ?? "Rider");
 
   await sql`
-    insert into contest_players (id) values (${id})
-    on conflict (id) do nothing
+    insert into contest_players (id, nickname) values (${id}, ${nick})
+    on conflict (id) do update set nickname = excluded.nickname
   `;
   await sql`
     insert into contest_week_players (week_id, player_id)
@@ -65,15 +82,20 @@ export async function joinAndRead(playerId: string): Promise<ContestSnapshot> {
   return readContest(id);
 }
 
-export async function submitAndRead(playerId: string, score: number): Promise<ContestSnapshot> {
+export async function submitAndRead(
+  playerId: string,
+  score: number,
+  nickname?: string,
+): Promise<ContestSnapshot> {
   const sql = await getSql();
   const week = getContestWeek();
   const id = playerId.slice(0, 80);
   const safe = Math.max(0, Math.min(10_000_000, Math.floor(score)));
+  const nick = sanitizeNickname(nickname ?? "Rider");
 
   await sql`
-    insert into contest_players (id) values (${id})
-    on conflict (id) do nothing
+    insert into contest_players (id, nickname) values (${id}, ${nick})
+    on conflict (id) do update set nickname = excluded.nickname
   `;
   await sql`
     insert into contest_week_players (week_id, player_id)

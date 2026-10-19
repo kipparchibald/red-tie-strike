@@ -1,6 +1,8 @@
-const STORAGE_KEY = "red-tie-strike-v1";
-const SAVE_VERSION = 1;
-const SETTINGS_KEY = "red-tie-settings-v1";
+const STORAGE_KEY = "neon-alley-dash-v1";
+const SAVE_VERSION = 2;
+const SETTINGS_KEY = "neon-alley-settings-v1";
+const LEGACY_STORAGE_KEY = "red-tie-strike-v1";
+const LEGACY_SETTINGS_KEY = "red-tie-settings-v1";
 
 export type Pace = "slow" | "normal" | "fast";
 export type KeyScheme = "arrows" | "wasd" | "all";
@@ -10,6 +12,7 @@ export type GameSettings = {
   pace: Pace;
   shake: boolean;
   keys: KeyScheme;
+  mute: boolean;
 };
 
 export const DEFAULT_SETTINGS: GameSettings = {
@@ -17,6 +20,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   pace: "normal",
   shake: true,
   keys: "all",
+  mute: false,
 };
 
 export const KEY_SCHEMES: Record<
@@ -40,7 +44,7 @@ export const KEY_SCHEMES: Record<
     jumpLabel: "↑ Space",
     slideLabel: "↓",
     runLabel: "→ Shift",
-    fireLabel: "Z Ctrl",
+    fireLabel: "Z Pop",
   },
   wasd: {
     jump: ["KeyW", "Space"],
@@ -50,7 +54,7 @@ export const KEY_SCHEMES: Record<
     jumpLabel: "W Space",
     slideLabel: "S",
     runLabel: "D Shift",
-    fireLabel: "F",
+    fireLabel: "F Pop",
   },
   all: {
     jump: ["Space", "ArrowUp", "KeyW", "KeyK"],
@@ -60,13 +64,14 @@ export const KEY_SCHEMES: Record<
     jumpLabel: "↑ W Space",
     slideLabel: "↓ S",
     runLabel: "→ D Shift",
-    fireLabel: "F Z",
+    fireLabel: "F Pop",
   },
 };
 
 export function loadSettings(): GameSettings {
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
+    let raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) raw = localStorage.getItem(LEGACY_SETTINGS_KEY);
     if (!raw) {
       const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       return { ...DEFAULT_SETTINGS, shake: !reduce };
@@ -75,7 +80,13 @@ export function loadSettings(): GameSettings {
     const lives = parsed.lives === 1 || parsed.lives === 5 ? parsed.lives : 3;
     const pace = parsed.pace === "slow" || parsed.pace === "fast" ? parsed.pace : "normal";
     const keys = parsed.keys === "arrows" || parsed.keys === "wasd" ? parsed.keys : "all";
-    return { lives, pace, shake: parsed.shake !== false, keys };
+    return {
+      lives,
+      pace,
+      shake: parsed.shake !== false,
+      keys,
+      mute: parsed.mute === true,
+    };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -105,13 +116,14 @@ function migrate(raw: Partial<RunnerSave> & { version?: number }): RunnerSave {
     highScore: typeof raw.highScore === "number" ? raw.highScore : 0,
     version: typeof raw.version === "number" ? raw.version : 0,
   };
-  if (save.version < 1) save.version = 1;
+  if (save.version < SAVE_VERSION) save.version = SAVE_VERSION;
   return save;
 }
 
 export function loadHighScore(): number {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) raw = localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return 0;
     const parsed = JSON.parse(raw) as Partial<RunnerSave>;
     return Math.max(0, Math.floor(migrate(parsed).highScore));

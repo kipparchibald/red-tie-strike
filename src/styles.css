@@ -1,20 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Bangers&family=Luckiest+Guy&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @theme {
-  --color-bg: #0a0a0b;
-  --color-bg-elevated: #121214;
-  --color-bg-subtle: #1a1a1e;
-  --color-fg: #f4f4f5;
-  --color-fg-muted: #a1a1aa;
-  --color-fg-subtle: #71717a;
-  --color-border: color-mix(in oklab, var(--color-fg) 12%, transparent);
-  --color-border-strong: color-mix(in oklab, var(--color-fg) 22%, transparent);
-  --color-accent: #d4d8e0;
-  --color-accent-fg: #0a0a0b;
-  --color-danger: #e07a6a;
-  --color-success: #7ab89a;
-  --color-warn: #c9a66b;
+  --color-bg: #1e1b4b;
+  --color-bg-elevated: #312e81;
+  --color-bg-subtle: #4338ca;
+  --color-fg: #fefce8;
+  --color-fg-muted: #c4b5fd;
+  --color-fg-subtle: #a5b4fc;
+  --color-border: color-mix(in oklab, #fefce8 18%, transparent);
+  --color-border-strong: color-mix(in oklab, #fefce8 28%, transparent);
+  --color-accent: #facc15;
+  --color-accent-fg: #1a1028;
+  --color-danger: #fb7185;
+  --color-success: #4ade80;
+  --color-warn: #fb923c;
 
   --radius-xs: 4px;
   --radius-sm: 8px;
@@ -23,6 +24,7 @@
   --radius-xl: 24px;
 
   --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-display: "Bangers", "Luckiest Guy", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
@@ -44,6 +46,29 @@
 
   html {
     color-scheme: dark;
+  }
+
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: 0.04em;
+  }
+
+  .toon-panel {
+    border: 3px solid #1a1028;
+    box-shadow: 0 6px 0 #1a1028;
+  }
+
+  .victory-emote {
+    animation: victory-pop 0.9s var(--ease-pop) infinite alternate;
+  }
+
+  @keyframes victory-pop {
+    from {
+      transform: translateY(0) rotate(-2deg) scale(1);
+    }
+    to {
+      transform: translateY(-6px) rotate(2deg) scale(1.06);
+    }
   }
 
   body {

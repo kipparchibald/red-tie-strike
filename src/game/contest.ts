@@ -1,6 +1,8 @@
-/** First contest week begins the week of launch (America/Denver). */
+/** Weekly leaderboard season (America/Denver). */
 export const CONTEST_EPOCH_MS = Date.parse("2026-09-14T00:00:00-06:00");
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const GAME_TITLE = "Neon Alley Dash";
 
 export type ContestWeek = {
   weekId: string;
@@ -9,16 +11,21 @@ export type ContestWeek = {
   endsAt: number;
 };
 
+export type LeaderboardEntry = {
+  nickname: string;
+  score: number;
+};
+
 export type ContestSnapshot = {
   weekId: string;
   endsAt: number;
   startsAt: number;
-  potDollars: number;
   uniqueThisWeek: number;
   lifetimePlayers: number;
   leaderScore: number;
   yourScore: number;
   youLead: boolean;
+  top: LeaderboardEntry[];
 };
 
 export function getContestWeek(now = Date.now()): ContestWeek {
@@ -66,7 +73,8 @@ export function formatWeekLeft(endsAt: number, now = Date.now()): string {
   return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 }
 
-const PLAYER_KEY = "red-tie-player-id";
+const PLAYER_KEY = "neon-alley-player-id";
+const NICKNAME_KEY = "neon-alley-nickname";
 
 export function getOrCreatePlayerId(): string {
   try {
@@ -83,10 +91,26 @@ export function getOrCreatePlayerId(): string {
   }
 }
 
-export function contestShareText(score: number, jobs: string, beat: number): string {
+export function loadNickname(): string {
+  try {
+    return localStorage.getItem(NICKNAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveNickname(nickname: string) {
+  try {
+    localStorage.setItem(NICKNAME_KEY, nickname);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function contestShareText(score: number, missions: string, beat: number): string {
   const link =
     typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}?beat=${beat}` : "";
-  return `Red Tie Strike — ${score.toLocaleString()} this week. ${jobs}. Same course for everyone. Beat me${link ? `: ${link}` : "."}`;
+  return `${GAME_TITLE} — ${score.toLocaleString()} this season week. ${missions}. Same course for everyone. Beat me${link ? `: ${link}` : "."}`;
 }
 
 export function emptyContestSnapshot(): ContestSnapshot {
@@ -95,11 +119,11 @@ export function emptyContestSnapshot(): ContestSnapshot {
     weekId: w.weekId,
     endsAt: w.endsAt,
     startsAt: w.startsAt,
-    potDollars: 0,
     uniqueThisWeek: 0,
     lifetimePlayers: 0,
     leaderScore: 0,
     yourScore: 0,
     youLead: false,
+    top: [],
   };
 }

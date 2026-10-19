@@ -1,5 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
+import { GAME_TITLE } from "@/game/contest";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -12,12 +13,17 @@ export const Route = createRootRoute({
       },
       {
         name: "description",
-        content:
-          "Red Tie Strike — jump onto oil tankers, slide under missiles, race the 2026 midterm clock.",
+        content: `${GAME_TITLE} — ride your hoverboard through a bright neighborhood, collect stars, unlock outfits, and climb the weekly season board.`,
       },
-      { title: "Red Tie Strike" },
+      { title: GAME_TITLE },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Bangers&family=Luckiest+Guy&display=swap",
+      },
+    ],
   }),
   component: RootDocument,
 });
