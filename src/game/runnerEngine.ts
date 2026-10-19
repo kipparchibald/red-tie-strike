@@ -1,5 +1,17 @@
 import { KEY_SCHEMES, loadHighScore, loadSettings, saveHighScore, saveSettings, type GameSettings } from "./storage";
-import { formatMidtermTicker, getMidtermRemaining, pad2 } from "./midtermClock";
+import { formatSeasonTicker, getSeasonRemaining, pad2 } from "./seasonHud";
+import { playSfx, setRunnerMuted } from "./runnerAudio";
+import { coinPickupScore, comboClearBonus, magnetPullStep } from "./runnerScoring";
+import type { BoardId, SkinId } from "./runnerMeta";
+import {
+  drawConfettiBurst,
+  drawLightBeam,
+  drawRarityOrb,
+  drawToonRider,
+  lootRarity,
+  strokeOutline,
+  TOON,
+} from "./runnerToon";
 import { courseDayNow, getContestWeek, listWeekCourses } from "./contest";
 
 export type GamePhase = "ready" | "playing" | "dead";
@@ -23,6 +35,10 @@ export type HudSnapshot = {
   coins: number;
   form: "normal" | "armor" | "sidearm";
   flare: number;
+  magnetTimer: number;
+  doubleCoinTimer: number;
+  skin: SkinId;
+  board: BoardId;
   boosting: boolean;
   sliding: boolean;
   jumpHeld: boolean;
@@ -66,8 +82,8 @@ type Coin = {
   y: number;
 };
 
-type Loot = "coins" | "shell" | "armor" | "sidearm" | "flare" | "life";
-type PowerKind = "armor" | "sidearm" | "flare" | "life";
+type Loot = "coins" | "shell" | "armor" | "sidearm" | "flare" | "life" | "magnet" | "double";
+type PowerKind = "armor" | "sidearm" | "flare" | "life" | "magnet" | "double";
 
 type Crate = {
   active: boolean;
@@ -118,6 +134,7 @@ type FloatText = {
 
 export type EngineCallbacks = {
   onHud?: (hud: HudSnapshot) => void;
+  onRunEnd?: (hud: HudSnapshot) => void;
 };
 
 const W = 960;
@@ -137,7 +154,7 @@ const LESSONS: { title: string; key: string; touch: string }[] = [
   { title: "Run", key: "Hold Shift or X", touch: "Hold Run" },
   { title: "Clear the gap", key: "Hold Shift and Space", touch: "Hold Run and Jump" },
   { title: "Fire", key: "Tap F", touch: "Tap Fire" },
-  { title: "Bust a crate", key: "Jump up into the crate", touch: "Jump up into the crate" },
+  { title: "Pop a gift box", key: "Jump up into the box", touch: "Jump up into the box" },
 ];
 const MAX_FALL = 1400;
 const SLIDE_DURATION = 0.55;
@@ -153,29 +170,29 @@ const TANKER_DECK = 76;
 const SLIDE_GAP = 34;
 
 const COLORS = {
-  skyTop: "#12161c",
-  skyMid: "#2a241c",
-  skyHorizon: "#c46a3a",
-  ground: "#2c261c",
-  groundTop: "#4a3e2c",
-  dust: "#6a5a3c",
-  suit: "#1b2433",
-  shirt: "#f2efe8",
-  tie: "#c43c32",
-  hair: "#d4b45a",
-  skin: "#e0b089",
-  tankerHull: "#3c4038",
-  tankerBottom: "#8a3c30",
-  tankerDeck: "#4a4e46",
-  drone: "#2e3a28",
-  missile: "#4a4034",
-  bunker: "#3a342c",
-  stripe: "#c43c32",
-  iranGreen: "#2f6b45",
-  combo: "#e8c98a",
-  near: "#7ab89a",
-  danger: "#e07a6a",
-  tracer: "#f4e6b0",
+  skyTop: TOON.skyTop,
+  skyMid: TOON.skyMid,
+  skyHorizon: TOON.skyHorizon,
+  ground: TOON.grassDark,
+  groundTop: TOON.grass,
+  dust: "#bbf7d0",
+  suit: "#ff6bcb",
+  shirt: "#fff8f0",
+  accent: "#8b5cf6",
+  hair: "#2d1b4e",
+  skin: TOON.skin,
+  tankerHull: "#94a3b8",
+  tankerBottom: "#64748b",
+  tankerDeck: "#e2e8f0",
+  drone: "#fb923c",
+  missile: "#fbbf24",
+  bunker: "#cbd5e1",
+  stripe: "#a855f7",
+  parkGreen: TOON.grass,
+  combo: "#fde047",
+  near: "#67e8f9",
+  danger: "#fb7185",
+  tracer: "#fef08a",
 };
 
 function clamp(v: number, a: number, b: number) {
@@ -227,6 +244,11 @@ export class RunnerEngine {
   private coins = 0;
   private form: "normal" | "armor" | "sidearm" = "normal";
   private flareTimer = 0;
+  private magnetTimer = 0;
+  private doubleCoinTimer = 0;
+  private skin: SkinId = "default";
+  private board: BoardId = "classic";
+  private pointerStart: { x: number; y: number; t: number } | null = null;
 
   private playerY = GROUND_Y - PLAYER_H_STAND;
   private playerVy = 0;
@@ -308,6 +330,7 @@ export class RunnerEngine {
     this.ctx = ctx;
     this.callbacks = callbacks;
     this.highScore = loadHighScore();
+    setRunnerMuted(this.settings.mute);
     this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     this.initPools();
     this.resetRun();
@@ -315,7 +338,12 @@ export class RunnerEngine {
     this.onKeyDown = (e) => this.handleKey(e, true);
     this.onKeyUp = (e) => this.handleKey(e, false);
     this.onPointerDown = (e) => this.handlePointer(e, true);
-    this.onPointerUp = () => this.pressSlide(false);
+    this.onPointerUp = (e: PointerEvent) => {
+      this.handlePointer(e, false);
+      this.pressSlide(false);
+      this.releaseJump();
+      this.pressBoost(false);
+    };
     this.bindInput();
     this.resize();
     this.emitHud();
@@ -388,7 +416,13 @@ export class RunnerEngine {
 
   setSettings(next: GameSettings) {
     this.settings = next;
+    setRunnerMuted(next.mute);
     saveSettings(next);
+  }
+
+  setCosmetics(skin: SkinId, board: BoardId) {
+    this.skin = skin;
+    this.board = board;
   }
 
   stopTour() {
@@ -585,6 +619,8 @@ export class RunnerEngine {
     this.coins = 0;
     this.form = "normal";
     this.flareTimer = 0;
+    this.magnetTimer = 0;
+    this.doubleCoinTimer = 0;
     this.lastComboBonus = 0;
     this.isNewRecord = false;
     this.speed = BASE_SPEED;
@@ -679,13 +715,33 @@ export class RunnerEngine {
   }
 
   private handlePointer(e: PointerEvent, down: boolean) {
-    if (!down) return;
     if (!window.matchMedia("(pointer: coarse)").matches) return;
-    e.preventDefault();
     const rect = this.canvas.getBoundingClientRect();
-    const y = (e.clientY - rect.top) / Math.max(1, rect.height);
-    if (this.phase !== "playing") return;
-    if (y > 0.78) this.pressSlide(true);
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (down) {
+      e.preventDefault();
+      this.pointerStart = { x, y, t: performance.now() };
+      if (this.phase === "ready" || this.phase === "dead") {
+        if (this.phase === "dead") this.restart();
+        else this.beginRun();
+      }
+      return;
+    }
+    const start = this.pointerStart;
+    this.pointerStart = null;
+    if (!start || this.phase !== "playing") return;
+    const dx = x - start.x;
+    const dy = y - start.y;
+    const dt = performance.now() - start.t;
+    if (dt < 420 && Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy)) {
+      if (dx > 0) this.pressBoost(true);
+      else this.pressFire();
+      return;
+    }
+    if (dy > 36) this.pressSlide(true);
+    else if (dy < -28) this.pressJump();
+    else if (y / Math.max(1, rect.height) > 0.72) this.pressSlide(true);
     else this.pressJump();
   }
 
@@ -705,6 +761,7 @@ export class RunnerEngine {
     this.stretchTimer = 0.18;
     this.squashTimer = 0;
     this.spawnDust(PLAYER_X + PLAYER_W * 0.5, this.currentSupportY(), 8, COLORS.dust);
+    playSfx("jump");
   }
 
   private trySlide() {
@@ -811,7 +868,9 @@ export class RunnerEngine {
                 ["armor", 22],
                 ["shell", 16],
                 ["sidearm", 16],
-                ["flare", 8],
+                ["flare", 6],
+                ["magnet", 6],
+                ["double", 6],
                 ["life", 4],
               ]
             : [
@@ -819,8 +878,10 @@ export class RunnerEngine {
                 ["armor", 18],
                 ["shell", 16],
                 ["sidearm", 20],
-                ["flare", 12],
-                ["life", 10],
+                ["flare", 8],
+                ["magnet", 8],
+                ["double", 8],
+                ["life", 8],
               ];
     const total = table.reduce((sum, [, w]) => sum + w, 0);
     let roll = this.rng() * total;
@@ -1045,6 +1106,8 @@ export class RunnerEngine {
     this.muzzle = Math.max(0, this.muzzle - dt);
     this.invuln = Math.max(0, this.invuln - dt);
     this.flareTimer = Math.max(0, this.flareTimer - dt);
+    this.magnetTimer = Math.max(0, this.magnetTimer - dt);
+    this.doubleCoinTimer = Math.max(0, this.doubleCoinTimer - dt);
 
     if (this.jumpBuffer > 0) this.jumpBuffer -= dt;
     if (this.jumpBuffer > 0) this.tryJump();
@@ -1126,7 +1189,7 @@ export class RunnerEngine {
     }
 
     this.updateShells(dt);
-    this.updatePickups();
+    this.updatePickups(dt);
     this.updatePowerups(dt);
 
     for (const s of this.shots) {
@@ -1341,7 +1404,7 @@ export class RunnerEngine {
     }
   }
 
-  private updatePickups() {
+  private updatePickups(dt: number) {
     const pTop = this.playerY;
     const pBot = this.playerY + this.playerH();
     const pLeft = PLAYER_X + 4;
@@ -1349,16 +1412,29 @@ export class RunnerEngine {
 
     for (const c of this.coinsPool) {
       if (!c.active) continue;
-      const sx = PLAYER_X + (c.x - this.distance);
+      let sx = PLAYER_X + (c.x - this.distance);
       if (sx < -40) {
         c.active = false;
         continue;
       }
-      if (pRight > sx - 8 && pLeft < sx + 16 && pBot > c.y - 8 && pTop < c.y + 16) {
+      if (this.magnetTimer > 0) {
+        const tx = PLAYER_X + PLAYER_W * 0.5;
+        const ty = this.playerY + this.playerH() * 0.4;
+        const pulled = magnetPullStep(sx + 8, c.y + 8, tx, ty, dt);
+        c.x = this.distance + (pulled.x - PLAYER_X);
+        c.y = pulled.y - 8;
+        sx = pulled.x;
+      }
+      const grabPad = this.magnetTimer > 0 ? 48 : 8;
+      if (pRight > sx - grabPad && pLeft < sx + 16 + grabPad && pBot > c.y - grabPad && pTop < c.y + 16 + grabPad) {
         c.active = false;
-        this.coins += 1;
-        this.lastComboBonus += 50;
-        this.spawnFloat(sx, c.y - 10, "+50", "#e8c98a");
+        const mult = this.doubleCoinTimer > 0 ? 2 : 1;
+        this.coins += mult;
+        const pts = coinPickupScore(50, this.doubleCoinTimer > 0);
+        this.lastComboBonus += pts;
+        this.score += pts;
+        this.spawnFloat(sx, c.y - 10, mult > 1 ? "+100" : "+50", "#ffe566");
+        playSfx("coin");
       }
     }
 
@@ -1396,7 +1472,8 @@ export class RunnerEngine {
       for (let i = 0; i < 4; i++) this.spawnCoin(crate.x - 10 + i * 18, crate.y - 20 - (i % 2) * 14);
       this.spawnFloat(sx, crate.y - 16, "BUST", COLORS.combo);
     } else {
-      this.spawnPower(crate.loot, crate.x + 6, crate.y - 8);
+      if (crate.loot === "magnet" || crate.loot === "double" || crate.loot === "armor" || crate.loot === "sidearm" || crate.loot === "flare" || crate.loot === "life")
+        this.spawnPower(crate.loot, crate.x + 6, crate.y - 8);
       this.spawnFloat(sx, crate.y - 16, crate.loot.toUpperCase(), COLORS.tracer);
     }
   }
@@ -1428,19 +1505,26 @@ export class RunnerEngine {
 
   private collectPower(p: Powerup) {
     p.active = false;
+    playSfx("power");
     if (p.kind === "armor") {
       if (this.form === "normal") this.form = "armor";
       else this.lastComboBonus += 100;
-      this.spawnFloat(PLAYER_X, this.playerY - 20, "ARMOR", COLORS.near);
+      this.spawnFloat(PLAYER_X, this.playerY - 20, "SHIELD", COLORS.near);
     } else if (p.kind === "sidearm") {
       this.form = "sidearm";
-      this.spawnFloat(PLAYER_X, this.playerY - 20, "SIDEARM", COLORS.danger);
+      this.spawnFloat(PLAYER_X, this.playerY - 20, "ZAP", COLORS.danger);
     } else if (p.kind === "flare") {
       this.flareTimer = 6.5;
-      this.spawnFloat(PLAYER_X, this.playerY - 20, "FLARE", COLORS.tracer);
+      this.spawnFloat(PLAYER_X, this.playerY - 20, "BOOST", COLORS.tracer);
+    } else if (p.kind === "magnet") {
+      this.magnetTimer = 8;
+      this.spawnFloat(PLAYER_X, this.playerY - 20, "MAGNET", COLORS.near);
+    } else if (p.kind === "double") {
+      this.doubleCoinTimer = 10;
+      this.spawnFloat(PLAYER_X, this.playerY - 20, "2× STARS", COLORS.combo);
     } else {
       this.lives = Math.min(5, this.lives + 1);
-      this.spawnFloat(PLAYER_X, this.playerY - 20, "1-UP", COLORS.tie);
+      this.spawnFloat(PLAYER_X, this.playerY - 20, "1-UP", COLORS.accent);
     }
     this.emitHud();
   }
@@ -1460,6 +1544,9 @@ export class RunnerEngine {
     const prevHigh = this.highScore;
     this.isNewRecord = this.score > prevHigh && this.score > 0;
     this.highScore = saveHighScore(this.score);
+    if (this.isNewRecord) playSfx("record");
+    else playSfx("hit");
+    this.callbacks.onRunEnd?.(this.buildHud());
     this.emitHud();
   }
 
@@ -1470,8 +1557,9 @@ export class RunnerEngine {
     if (shot) {
       this.intercepts += 1;
       if (this.challengesOn()) this.markJob("shots");
-      const bonus = 40 + this.combo * 10;
+      const bonus = comboClearBonus(40, this.combo);
       this.awardClear(bonus, `+${bonus}`, screenX, cy - 10, COLORS.tracer);
+      playSfx("combo");
     }
   }
 
@@ -1490,10 +1578,19 @@ export class RunnerEngine {
   }
 
   private spawnBurst(x: number, y: number) {
-    for (let i = 0; i < 18; i++) {
+    const palette = ["#f472b6", "#a78bfa", "#38bdf8", "#facc15", "#4ade80", COLORS.tracer];
+    for (let i = 0; i < 22; i++) {
       const a = Math.random() * Math.PI * 2;
-      const sp = 40 + Math.random() * 160;
-      this.spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp, 0.45, 2 + Math.random() * 3, i % 2 ? COLORS.danger : COLORS.tracer);
+      const sp = 40 + Math.random() * 180;
+      this.spawnParticle(
+        x,
+        y,
+        Math.cos(a) * sp,
+        Math.sin(a) * sp,
+        0.55,
+        2 + Math.random() * 4,
+        palette[i % palette.length],
+      );
     }
   }
 
@@ -1550,10 +1647,10 @@ export class RunnerEngine {
     }
   }
 
-  private emitHud() {
+  private buildHud(): HudSnapshot {
     const lo = BASE_SPEED * COAST_MULT;
     const speedNorm = clamp((this.speed - lo) / (MAX_SPEED - lo), 0, 1);
-    this.callbacks.onHud?.({
+    return {
       phase: this.phase,
       score: this.score,
       highScore: this.highScore,
@@ -1586,7 +1683,15 @@ export class RunnerEngine {
       courseDay: this.courseDay,
       courseLabel: listWeekCourses().find((c) => c.day === this.courseDay)?.label ?? "",
       tourDone: this.tourDone,
-    });
+      magnetTimer: this.magnetTimer,
+      doubleCoinTimer: this.doubleCoinTimer,
+      skin: this.skin,
+      board: this.board,
+    };
+  }
+
+  private emitHud() {
+    this.callbacks.onHud?.(this.buildHud());
   }
 
   private challengesOn() {
@@ -1617,14 +1722,14 @@ export class RunnerEngine {
     if (which === "hops") this.toldHop = true;
     if (which === "slides") this.toldSlide = true;
     if (which === "shots") this.toldShot = true;
-    this.spawnFloat(PLAYER_X, this.playerY - 28, "JOB DONE", COLORS.tie);
+    this.spawnFloat(PLAYER_X, this.playerY - 28, "MISSION!", COLORS.accent);
   }
 
   private tickChallenge() {
     if (this.mode !== "beat" || this.beatTarget <= 0 || this.beatMet) return;
     if (this.score >= this.beatTarget) {
       this.beatMet = true;
-      this.spawnFloat(PLAYER_X, this.playerY - 36, "BEAT IT", COLORS.tie);
+      this.spawnFloat(PLAYER_X, this.playerY - 36, "YOU GOT IT!", COLORS.accent);
     }
   }
 
@@ -1800,7 +1905,7 @@ export class RunnerEngine {
     if (this.tutorialStep < 6) this.prepareLesson();
     else this.wipeActors();
     try {
-      if (this.tutorialStep >= 6) localStorage.setItem("rts-lesson-done", "1");
+      if (this.tutorialStep >= 6) localStorage.setItem("nad-lesson-done", "1");
     } catch {
       /* ignore */
     }
@@ -1829,12 +1934,15 @@ export class RunnerEngine {
     this.drawSpeedFx(ctx);
     this.drawParticles(ctx);
     this.drawFloats(ctx);
+    if (this.phase === "dead" && this.isNewRecord) {
+      drawConfettiBurst(ctx, PLAYER_X + PLAYER_W * 0.5, this.playerY - 12, this.runPhase);
+    }
     if (this.flash > 0) {
       ctx.fillStyle = `rgba(255, 210, 160, ${this.flash * 0.4})`;
       ctx.fillRect(-20, -20, W + 40, H + 40);
     }
     ctx.restore();
-    this.drawMidtermHud(ctx);
+    this.drawSeasonHud(ctx);
   }
 
   private drawSpeedFx(ctx: CanvasRenderingContext2D) {
@@ -1864,30 +1972,33 @@ export class RunnerEngine {
     ctx.restore();
   }
 
-  private drawMidtermHud(ctx: CanvasRenderingContext2D) {
-    const r = getMidtermRemaining();
+  private drawSeasonHud(ctx: CanvasRenderingContext2D) {
+    const r = getSeasonRemaining();
     ctx.save();
-    ctx.fillStyle = "rgba(10, 10, 11, 0.72)";
+    ctx.fillStyle = "rgba(20, 24, 48, 0.78)";
     ctx.fillRect(0, 0, W, 36);
-    ctx.fillStyle = "rgba(244, 244, 245, 0.12)";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
     ctx.fillRect(0, 36, W, 1);
     ctx.font = "600 11px Segoe UI, system-ui, sans-serif";
-    ctx.fillStyle = "rgba(161, 161, 170, 1)";
+    ctx.fillStyle = "rgba(220, 230, 255, 0.85)";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText("MIDTERMS", 16, 18);
+    ctx.fillText("SEASON WEEK", 16, 18);
     ctx.font = "600 15px ui-monospace, SF Mono, Menlo, Consolas, monospace";
-    ctx.fillStyle = r.expired ? "#7ab89a" : "#f4f4f5";
+    ctx.fillStyle = "#fff";
     ctx.textAlign = "right";
-    const clock = r.expired ? "POLLS OPEN" : `${r.days}d  ${pad2(r.hours)}:${pad2(r.minutes)}:${pad2(r.seconds)}`;
+    const clock =
+      r.days > 0
+        ? `${r.days}d  ${pad2(r.hours)}:${pad2(r.minutes)}`
+        : `${pad2(r.hours)}:${pad2(r.minutes)}:${pad2(r.seconds)}`;
     ctx.fillText(clock, W - 16, 18);
     if (this.phase === "playing") {
-      ctx.fillStyle = "rgba(10, 10, 11, 0.45)";
+      ctx.fillStyle = "rgba(20, 24, 48, 0.45)";
       ctx.fillRect(0, 37, W, 22);
       ctx.font = "500 11px Segoe UI, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(201, 166, 107, 0.95)";
+      ctx.fillStyle = "rgba(180, 240, 255, 0.95)";
       ctx.textAlign = "left";
-      const msg = formatMidtermTicker(r);
+      const msg = formatSeasonTicker();
       const tw = Math.max(ctx.measureText(msg).width, 1);
       const x = W - (this.tickerX % tw);
       ctx.fillText(msg, x, 48);
@@ -1901,20 +2012,9 @@ export class RunnerEngine {
       if (!c.active) continue;
       const sx = PLAYER_X + (c.x - this.distance);
       if (sx < -20 || sx > W + 20) continue;
-      const bob = Math.sin(this.runPhase * 2 + c.x * 0.02) * 3;
+      const bob = Math.sin(this.runPhase * 2 + c.x * 0.02) * 4;
       const y = c.y + bob;
-      ctx.fillStyle = "#8a6a28";
-      ctx.beginPath();
-      ctx.ellipse(sx + 8, y + 8, 9, 9, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#e8c98a";
-      ctx.beginPath();
-      ctx.ellipse(sx + 8, y + 8, 6.5, 6.5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#8a6a28";
-      ctx.font = "700 9px Segoe UI, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("$", sx + 8, y + 11);
+      drawRarityOrb(ctx, sx + 8, y + 8, 9, "uncommon", this.runPhase, "★");
     }
 
     for (const crate of this.crates) {
@@ -1923,66 +2023,39 @@ export class RunnerEngine {
       if (sx < -40 || sx > W + 40) continue;
       const lift = crate.bump > 0 ? -8 : 0;
       const y = crate.y + lift;
-      const mark =
-        crate.loot === "shell"
-          ? "S"
-          : crate.loot === "armor"
-            ? "A"
-            : crate.loot === "sidearm"
-              ? "F"
-              : crate.loot === "flare"
-                ? "*"
-                : crate.loot === "life"
-                  ? "+"
-                  : "?";
-      ctx.fillStyle =
-        crate.loot === "shell" ? "#3d4a32" : crate.loot === "sidearm" ? "#6a3030" : "#6a5438";
+      const rarity = lootRarity(crate.loot);
+      drawLightBeam(ctx, sx + 18, y + 16, rarity, this.runPhase, 56);
+      ctx.fillStyle = "#a16207";
       ctx.beginPath();
-      ctx.roundRect(sx, y, 36, 34, 3);
+      ctx.roundRect(sx, y, 36, 34, 6);
       ctx.fill();
-      ctx.strokeStyle = "rgba(244,244,245,0.35)";
-      ctx.lineWidth = 2;
+      strokeOutline(ctx);
+      ctx.stroke();
+      ctx.fillStyle = "#fde68a";
+      ctx.fillRect(sx + 4, y + 4, 28, 26);
+      strokeOutline(ctx, 2);
       ctx.strokeRect(sx + 4, y + 4, 28, 26);
-      ctx.fillStyle = crate.loot === "life" ? COLORS.tie : "#e8c98a";
-      ctx.font = "700 14px Segoe UI, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(mark, sx + 18, y + 22);
+      drawRarityOrb(ctx, sx + 18, y + 16, 8, rarity, this.runPhase, "?");
     }
 
     for (const p of this.powerups) {
       if (!p.active) continue;
       const sx = PLAYER_X + (p.x - this.distance);
       if (sx < -30 || sx > W + 30) continue;
-      const y = p.y + Math.sin(this.runPhase * 3 + p.x) * 2;
-      ctx.beginPath();
-      if (p.kind === "armor") {
-        ctx.fillStyle = "#7ab89a";
-        ctx.roundRect(sx, y, 26, 22, 4);
-        ctx.fill();
-        ctx.fillStyle = "#1b2433";
-        ctx.fillRect(sx + 8, y + 4, 10, 14);
-      } else if (p.kind === "sidearm") {
-        ctx.fillStyle = "#c43c32";
-        ctx.roundRect(sx, y + 6, 26, 10, 3);
-        ctx.fill();
-        ctx.fillRect(sx + 18, y + 2, 6, 8);
-      } else if (p.kind === "flare") {
-        ctx.fillStyle = "#f4e6b0";
-        ctx.arc(sx + 12, y + 12, 11, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "#c46a3a";
-        ctx.beginPath();
-        ctx.arc(sx + 12, y + 12, 5, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillStyle = COLORS.tie;
-        ctx.roundRect(sx + 8, y, 8, 22, 2);
-        ctx.fill();
-        ctx.fillStyle = "#f4f4f5";
-        ctx.font = "700 11px Segoe UI, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("+", sx + 12, y + 16);
-      }
+      const y = p.y + Math.sin(this.runPhase * 3 + p.x) * 3;
+      const glyph =
+        p.kind === "armor"
+          ? "S"
+          : p.kind === "sidearm"
+            ? "Z"
+            : p.kind === "flare"
+              ? "B"
+              : p.kind === "magnet"
+                ? "M"
+                : p.kind === "double"
+                  ? "2"
+                  : "+";
+      drawRarityOrb(ctx, sx + 12, y + 12, 11, lootRarity(p.kind), this.runPhase, glyph);
     }
 
     for (const s of this.shells) {
@@ -2008,12 +2081,11 @@ export class RunnerEngine {
 
   private drawSky(ctx: CanvasRenderingContext2D) {
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, "#07090d");
-    g.addColorStop(0.38, "#1a1714");
-    g.addColorStop(0.62, "#4a2a1c");
-    g.addColorStop(0.78, "#c46a3a");
-    g.addColorStop(0.9, "#e8a060");
-    g.addColorStop(1, "#2a1c14");
+    g.addColorStop(0, COLORS.skyTop);
+    g.addColorStop(0.45, COLORS.skyMid);
+    g.addColorStop(0.72, COLORS.skyHorizon);
+    g.addColorStop(0.88, "#ffb4d9");
+    g.addColorStop(1, "#e8f4ff");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
@@ -2048,11 +2120,11 @@ export class RunnerEngine {
     }
     ctx.globalAlpha = 1;
 
-    // distant smoke plumes
+    // fluffy clouds
     for (let i = 0; i < 3; i++) {
       const px = 140 + i * 260 - ((this.bgScroll * 0.08) % 40);
       const py = 210 + i * 18;
-      ctx.fillStyle = "rgba(40, 32, 28, 0.28)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
       ctx.beginPath();
       ctx.ellipse(px, py, 36 + i * 8, 14, -0.4, 0, Math.PI * 2);
       ctx.fill();
@@ -2064,16 +2136,16 @@ export class RunnerEngine {
 
   private drawMountains(ctx: CanvasRenderingContext2D) {
     const scroll = this.bgScroll % (W * 2);
-    ctx.fillStyle = "#141210";
+    ctx.fillStyle = "#4a5878";
     this.drawSilhouette(ctx, -scroll, GROUND_Y - 36, 1.15, 110);
     this.drawSilhouette(ctx, -scroll + W * 1.7, GROUND_Y - 36, 1.15, 110);
-    ctx.fillStyle = "rgba(255, 160, 90, 0.06)";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
     ctx.fillRect(0, GROUND_Y - 70, W, 34);
   }
 
   private drawMidHills(ctx: CanvasRenderingContext2D) {
     const scroll = this.midScroll % (W * 1.5);
-    ctx.fillStyle = "#221c16";
+    ctx.fillStyle = "#6a7898";
     this.drawSilhouette(ctx, -scroll, GROUND_Y - 6, 0.9, 58);
     this.drawSilhouette(ctx, -scroll + W * 1.25, GROUND_Y - 6, 0.9, 58);
     // ridge highlight
@@ -2119,13 +2191,13 @@ export class RunnerEngine {
 
   private drawGround(ctx: CanvasRenderingContext2D) {
     const sand = ctx.createLinearGradient(0, GROUND_Y, 0, H);
-    sand.addColorStop(0, "#5a4630");
-    sand.addColorStop(0.18, "#3a3024");
-    sand.addColorStop(1, "#1a1612");
+    sand.addColorStop(0, "#8a9ab8");
+    sand.addColorStop(0.18, "#5a6878");
+    sand.addColorStop(1, "#3a4458");
     ctx.fillStyle = sand;
     ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
 
-    ctx.fillStyle = "#c9a36a";
+    ctx.fillStyle = "#dbe8ff";
     ctx.fillRect(0, GROUND_Y, W, 3);
     ctx.fillStyle = "#2a2218";
     ctx.fillRect(0, GROUND_Y + 3, W, 5);
@@ -2227,15 +2299,12 @@ export class RunnerEngine {
     }
     ctx.fillStyle = "#2a2e28";
     ctx.fillRect(bx + 12, deck - 48, 3, 14);
-    // flag
-    ctx.fillStyle = COLORS.iranGreen;
-    ctx.fillRect(bx + 15, deck - 46, 14, 4);
-    ctx.fillStyle = "#f4f4f5";
-    ctx.fillRect(bx + 15, deck - 42, 14, 4);
-    ctx.fillStyle = COLORS.stripe;
-    ctx.fillRect(bx + 15, deck - 38, 14, 4);
+    ctx.fillStyle = "#ff6b9d";
+    ctx.beginPath();
+    ctx.arc(bx + 18, deck - 44, 5, 0, Math.PI * 2);
+    ctx.fill();
 
-    // bow wave
+    // curb glow
     ctx.strokeStyle = "rgba(232, 220, 200, 0.35)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -2292,8 +2361,8 @@ export class RunnerEngine {
     ctx.lineTo(cx + 4, cy + 7);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = COLORS.stripe;
-    ctx.fillRect(cx - 6, cy - 1.5, 10, 3);
+    ctx.fillStyle = "#ffe566";
+    ctx.fillRect(cx - 5, cy - 2, 10, 4);
     ctx.fillStyle = "#9ad0ff";
     ctx.beginPath();
     ctx.arc(cx + 10, cy, 2, 0, Math.PI * 2);
@@ -2347,10 +2416,10 @@ export class RunnerEngine {
     ctx.closePath();
     ctx.fill();
 
-    ctx.fillStyle = COLORS.iranGreen;
-    ctx.fillRect(x + w * 0.45, y + 10, 10, 8);
-    ctx.fillStyle = "#f4f4f5";
-    ctx.fillRect(x + w * 0.45 + 10, y + 10, 8, 8);
+    ctx.fillStyle = "#ff9f43";
+    ctx.beginPath();
+    ctx.arc(x + w * 0.5, y + 14, 6, 0, Math.PI * 2);
+    ctx.fill();
     ctx.strokeStyle = "rgba(255,255,255,0.25)";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -2386,12 +2455,8 @@ export class RunnerEngine {
     ctx.fillStyle = "rgba(255, 180, 90, 0.35)";
     ctx.fillRect(x + w * 0.32, y + 30, w * 0.16, 4);
 
-    ctx.fillStyle = COLORS.iranGreen;
-    ctx.fillRect(x + 8, y + 18, 8, 4);
-    ctx.fillStyle = "#f4f4f5";
-    ctx.fillRect(x + 16, y + 18, 8, 4);
-    ctx.fillStyle = COLORS.stripe;
-    ctx.fillRect(x + 24, y + 18, 8, 4);
+    ctx.fillStyle = "#7c5cff";
+    ctx.fillRect(x + 10, y + 14, w - 20, 4);
   }
 
   private drawShots(ctx: CanvasRenderingContext2D) {
@@ -2453,144 +2518,21 @@ export class RunnerEngine {
       ctx.stroke();
     }
 
-    const bw = w * 0.82;
-    const bh = h * 0.72;
-    const top = -bh / 2;
-
-    if (!this.sliding) {
-      // jacket
-      const jacket = ctx.createLinearGradient(-bw / 2, top, bw / 2, top + bh);
-      jacket.addColorStop(0, "#2a3548");
-      jacket.addColorStop(1, "#121820");
-      ctx.fillStyle = jacket;
+    ctx.restore();
+    const scale = ((this.scaleX + this.scaleY) / 2) * powered;
+    drawToonRider(ctx, this.skin, this.board, this.runPhase, {
+      cx: cx + deathOx,
+      cy: cy + deathOy,
+      scale: scale * 0.92,
+      sliding: this.sliding,
+      emote: this.phase === "dead" && this.isNewRecord,
+    });
+    if (this.muzzle > 0 && !this.sliding) {
+      ctx.fillStyle = "rgba(250, 204, 21, 0.9)";
       ctx.beginPath();
-      ctx.moveTo(-bw / 2, top + 16);
-      ctx.lineTo(-bw / 2 - 2, top + bh - 2);
-      ctx.lineTo(bw / 2 + 2, top + bh - 2);
-      ctx.lineTo(bw / 2, top + 16);
-      ctx.quadraticCurveTo(0, top + 8, -bw / 2, top + 16);
-      ctx.fill();
-      // lapels
-      ctx.fillStyle = "#0e141c";
-      ctx.beginPath();
-      ctx.moveTo(-2, top + 14);
-      ctx.lineTo(-12, top + bh - 6);
-      ctx.lineTo(-4, top + bh - 6);
-      ctx.closePath();
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(2, top + 14);
-      ctx.lineTo(12, top + bh - 6);
-      ctx.lineTo(4, top + bh - 6);
-      ctx.closePath();
-      ctx.fill();
-      // shirt
-      ctx.fillStyle = COLORS.shirt;
-      ctx.beginPath();
-      ctx.moveTo(0, top + 12);
-      ctx.lineTo(6, top + bh - 8);
-      ctx.lineTo(-6, top + bh - 8);
-      ctx.closePath();
-      ctx.fill();
-      // tie
-      ctx.fillStyle = COLORS.tie;
-      ctx.beginPath();
-      ctx.moveTo(-2.5, top + 16);
-      ctx.lineTo(2.5, top + 16);
-      ctx.lineTo(4.5, top + bh - 12);
-      ctx.lineTo(0, top + bh - 6);
-      ctx.lineTo(-4.5, top + bh - 12);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#8e241c";
-      ctx.beginPath();
-      ctx.moveTo(-3, top + 16);
-      ctx.lineTo(3, top + 16);
-      ctx.lineTo(0, top + 22);
-      ctx.closePath();
-      ctx.fill();
-
-      // pistol
-      ctx.fillStyle = "#141416";
-      ctx.fillRect(bw / 2 - 4, -1, 16, 5);
-      ctx.fillRect(bw / 2 + 8, -3, 5, 4);
-      if (this.muzzle > 0) {
-        ctx.fillStyle = "rgba(255, 230, 160, 0.9)";
-        ctx.beginPath();
-        ctx.arc(bw / 2 + 22, 1, 6 + this.muzzle * 20, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // head
-      ctx.fillStyle = COLORS.skin;
-      ctx.beginPath();
-      ctx.ellipse(1, top - 6, 12, 13, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#c99570";
-      ctx.beginPath();
-      ctx.ellipse(6, top - 2, 4, 6, 0.2, 0, Math.PI * 2);
-      ctx.fill();
-      // hair
-      ctx.fillStyle = COLORS.hair;
-      ctx.beginPath();
-      ctx.ellipse(-1, top - 16, 15, 8, -0.15, Math.PI * 0.9, Math.PI * 2.15);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(-12, top - 12);
-      ctx.quadraticCurveTo(-18, top - 2, -6, top);
-      ctx.quadraticCurveTo(-14, top - 8, -10, top - 14);
-      ctx.fill();
-      // brow + eye
-      ctx.fillStyle = "#3a3028";
-      ctx.fillRect(0, top - 8, 9, 1.6);
-      ctx.fillStyle = "#1a1814";
-      ctx.beginPath();
-      ctx.ellipse(7, top - 5, 2.2, 1.6, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#f4f4f5";
-      ctx.fillRect(6.2, top - 5.6, 1, 1);
-
-      // legs
-      const swing = Math.sin(this.runPhase) * (this.onGround && this.phase === "playing" ? 9 : 4);
-      ctx.strokeStyle = "#121820";
-      ctx.lineWidth = 5;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      if (this.onGround && this.phase === "playing") {
-        ctx.moveTo(-6, top + bh - 2);
-        ctx.lineTo(-8 + swing, top + bh + 14);
-        ctx.moveTo(6, top + bh - 2);
-        ctx.lineTo(8 - swing, top + bh + 14);
-      } else {
-        ctx.moveTo(-6, top + bh - 2);
-        ctx.lineTo(-12, top + bh + 10);
-        ctx.moveTo(6, top + bh - 2);
-        ctx.lineTo(10, top + bh + 8);
-      }
-      ctx.stroke();
-      ctx.fillStyle = "#0c0c0e";
-      if (this.onGround && this.phase === "playing") {
-        ctx.fillRect(-12 + swing, top + bh + 12, 8, 3);
-        ctx.fillRect(4 - swing, top + bh + 12, 8, 3);
-      }
-    } else {
-      ctx.fillStyle = "#1b2433";
-      ctx.beginPath();
-      ctx.roundRect(-18, -8, 36, 16, 6);
-      ctx.fill();
-      ctx.fillStyle = COLORS.tie;
-      ctx.fillRect(-4, -6, 6, 12);
-      ctx.fillStyle = COLORS.skin;
-      ctx.beginPath();
-      ctx.ellipse(16, -2, 11, 8, 0.15, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = COLORS.hair;
-      ctx.beginPath();
-      ctx.ellipse(16, -9, 13, 6, 0.1, 0, Math.PI * 2);
+      ctx.arc(cx + deathOx + 34, cy + deathOy - 8, 6 + this.muzzle * 20, 0, Math.PI * 2);
       ctx.fill();
     }
-
-    ctx.restore();
   }
   private drawParticles(ctx: CanvasRenderingContext2D) {
     for (const p of this.particles) {
@@ -2606,13 +2548,16 @@ export class RunnerEngine {
   }
 
   private drawFloats(ctx: CanvasRenderingContext2D) {
-    ctx.font = "600 16px Segoe UI, system-ui, sans-serif";
+    ctx.font = '700 20px "Bangers", "Luckiest Guy", system-ui, sans-serif';
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
     for (const f of this.floats) {
       if (!f.active) continue;
       const a = clamp(f.life / f.maxLife, 0, 1);
       ctx.globalAlpha = a;
+      ctx.strokeStyle = TOON.outline;
+      ctx.lineWidth = 3;
+      ctx.strokeText(f.text, f.x, f.y);
       ctx.fillStyle = f.color;
       ctx.fillText(f.text, f.x, f.y);
     }
