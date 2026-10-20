@@ -2525,6 +2525,7 @@ export class RunnerEngine {
       cy: cy + deathOy,
       scale: scale * 0.92,
       sliding: this.sliding,
+      airborne: this.phase === "playing" && !this.onGround && !this.sliding,
       emote: this.phase === "dead" && this.isNewRecord,
     });
     if (this.muzzle > 0 && !this.sliding) {

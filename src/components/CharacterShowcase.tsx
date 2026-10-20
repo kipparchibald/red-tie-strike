@@ -8,7 +8,7 @@ type Props = {
   className?: string;
 };
 
-/** Lobby-style rotating preview for the skins shop (2D toon, mobile-friendly). */
+/** Lobby preview of the rider for the skins shop. */
 export function CharacterShowcase({ skin, board, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const phaseRef = useRef(0);
